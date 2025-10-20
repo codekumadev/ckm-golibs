@@ -1,8 +1,92 @@
 # ckm-golibs
 
-Reusable Go utilities for database connectivity and structured logging. The tables below provide a quick reference for every exported type and function in the repository.
+Reusable Go utilities for dependency injection, database connectivity, and structured logging. The tables below provide a quick reference for each package and its exported types and functions.
 
-## Package `databases`
+## Installation
+
+- Root module: `go get github.com/lu69x/ckm-golibs@latest`
+- Packages can be imported individually, for example:
+  - `github.com/lu69x/ckm-golibs/log`
+  - `github.com/lu69x/ckm-golibs/database`
+  - `github.com/lu69x/ckm-golibs/containers`
+
+Go version: 1.23+
+
+---
+
+## Package `containers`
+
+Lightweight, reflection-based dependency injection container with support for named registrations, singletons, value providers, resolution, and struct field injection via tags.
+
+| Item | Kind | Description |
+| --- | --- | --- |
+| `Container` | Type | Map-backed container keyed by `reflect.Type` and optional name. |
+| `New()` | Function | Creates a fresh container instance. |
+| `Register(resolver any)` | Method | Registers a factory function; returns a new instance per resolve. |
+| `NamedRegister(name string, resolver any)` | Method | Same as `Register` but under a name. |
+| `Singleton(resolver any)` | Method | Registers a factory executed once; the instance is reused. |
+| `NamedSingleton(name string, resolver any)` | Method | Named variant of `Singleton`. |
+| `Value(resolver any)` | Method | Registers an already-constructed instance (value singleton). |
+| `NamedValue(name string, resolver any)` | Method | Named variant of `Value`. |
+| `Resolve(ptr any) error` | Method | Resolves into the provided pointer; returns error if missing. |
+| `NamedResolve(ptr any, name string) error` | Method | Resolves a named binding. |
+| `MustResolve(ptr any)` | Method | Like `Resolve` but panics on error. |
+| `MustNameResolve(ptr any, name string)` | Method | Like `NamedResolve` but panics on error. |
+| `Inject(structPtr any) error` | Method | Populates struct fields using `inject:"<name>"` tag. |
+| `Reset()` | Method | Clears all registrations. |
+
+Global helpers mirror the instance API: `containers.Register`, `Singleton`, `Value`, `Resolve`, `NamedResolve`, `MustResolve`, `MustNamedResolve`, `Inject`, and `Reset`.
+
+### Field injection
+
+- Add a struct tag `inject:"name"` (empty string for default) on fields with concrete interface/type you registered in the container.
+- `Inject(&myStruct)` will set those fields using unsafe-aware assignment to bypass unexported field restrictions where applicable.
+
+### Containers usage example
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/lu69x/ckm-golibs/containers"
+)
+
+type Service interface{ Ping() string }
+type svcImpl struct{ id string }
+func (s *svcImpl) Ping() string { return "pong:" + s.id }
+
+type Handler struct {
+    SvcDefault Service  `inject:""`
+    SvcBlue    Service  `inject:"blue"`
+}
+
+func main() {
+    c := containers.New()
+
+    c.Singleton(func() Service { return &svcImpl{id: "default"} })
+    c.NamedSingleton("blue", func() Service { return &svcImpl{id: "blue"} })
+
+    // Resolve
+    var s Service
+    if err := c.Resolve(&s); err != nil { panic(err) }
+    fmt.Println(s.Ping()) // "pong:default"
+
+    // Inject by tag
+    h := &Handler{}
+    if err := c.Inject(h); err != nil { panic(err) }
+    fmt.Println(h.SvcDefault.Ping(), h.SvcBlue.Ping())
+}
+```
+
+Notes:
+- `Singleton` is concurrency-safe and initializes the instance once.
+- Resolver functions may optionally return `(T, error)`; the error is propagated.
+- `Resolve` expects a pointer to the abstraction type (concrete/interface).
+
+---
+
+## Package `database`
 
 | Item | Kind | Description |
 | --- | --- | --- |
@@ -77,12 +161,12 @@ Field helpers re-export zap constructors like `String`, `Int`, `Bool`, `Duration
 package main
 
 import (
-    "github.com/yourorg/ckm-golibs/databases"
-    clog "github.com/yourorg/ckm-golibs/log"
+    "github.com/lu69x/ckm-golibs/database"
+    clog "github.com/lu69x/ckm-golibs/log"
 )
 
 func main() {
-    dbConf := databases.SqlDbConfig{
+    dbConf := database.SqlDbConfig{
         Host:     "localhost",
         Port:     5432,
         User:     "postgres",
@@ -92,10 +176,18 @@ func main() {
         Schema:   "public",
     }
 
-    db := databases.NewDatabase(dbConf, "postgres").Connect()
+    db := database.NewDatabase(dbConf, "postgres").Connect()
     _ = db // use the *gorm.DB connection
 
     logger := clog.New("info", "json")
     logger.Info("application started", clog.String("module", "main"))
 }
+```
+
+### Logging to a file
+
+```go
+logger := clog.NewFile("debug", "console", "app")
+logger.Debug("file logging enabled")
+defer logger.Sync()
 ```
